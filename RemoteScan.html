@@ -1,0 +1,212 @@
+////////////////////////////////////////////
+// Bond Bridge RF/IR scanner and CQ Encoder.
+//
+// Copyright 2021 Amit Srivastava
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"),
+// to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense,
+// and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+// The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+// IN THE SOFTWARE.
+////////////////////////////////////////////
+
+<!DOCTYPE html>
+<html>
+
+<head>
+<script src="./httprequest.js"></script>
+<script>
+   // Bond Bridge communication
+   function devices() {
+      var ip = document.getElementById('ip').value;
+      var token = document.getElementById('token').value;
+      var request = "http://" + ip + "/v2/devices";
+      var header = { "BOND-Token": token };
+
+      // test code to use a known API for troubleshooting
+      // request = "https://www.boredapi.com/api/activity";
+      // header = { };
+
+      document.getElementById('request').value = request;
+      var http = new HTTPRequest();
+      http.get_json(request, header)
+         .then(json => document.getElementById('response').value = JSON.stringify(json))
+         .catch(err => document.getElementById('response').value = err);
+   }
+
+   function scanIR() {
+      var ip = document.getElementById('ip').value;
+      var token = document.getElementById('token').value;
+      var request = "http://" + ip + "/v2/signal/scan";
+      var body = { "freq": 38 };
+      var header = { "BOND-Token": token };
+
+      document.getElementById('request').value = request;
+      var http = new HTTPRequest();
+      http.put_json(request, body, header)
+         .then(json => document.getElementById('response').value = JSON.stringify(json))
+         .catch(err => document.getElementById('response').value = err);
+   }
+
+   function scanRF() {
+      var ip = document.getElementById('ip').value;
+      var token = document.getElementById('token').value;
+      var request = "http://" + ip + "/v2/signal/scan";
+      var header = { "BOND-Token": token };
+
+      document.getElementById('request').value = request;
+      var http = new HTTPRequest();
+      http.put_json(request, {}, header)
+         .then(json => document.getElementById('response').value = JSON.stringify(json))
+         .catch(err => document.getElementById('response').value = err);
+   }
+
+   function cancelScan() {
+      var ip = document.getElementById('ip').value;
+      var token = document.getElementById('token').value;
+      var request = "http://" + ip + "/v2/signal/scan";
+      var header = { "BOND-Token": token };
+
+      document.getElementById('request').value = request;
+      var http = new HTTPRequest();
+      http.delete(request, header)
+         .then(response => document.getElementById('response').value = response.status)
+         .catch(err => document.getElementById('response').value = err);
+   }
+
+   function scanResult() {
+      var ip = document.getElementById('ip').value;
+      var token = document.getElementById('token').value;
+      var request = "http://" + ip + "/v2/signal/scan/signal";
+      var header = { "BOND-Token": token };
+
+      document.getElementById('request').value = request;
+      var http = new HTTPRequest();
+      http.get_json(request, header)
+         .then(json => {
+            document.getElementById('response').value = JSON.stringify(json);
+            document.getElementById('cqResponse').value = JSON.stringify(convert(json));
+         })
+         .catch(err => document.getElementById('cqResponse').value = err);
+   }
+
+   function transmit() {
+      var ip = document.getElementById('ip').value;
+      var token = document.getElementById('token').value;
+      var request = "http://" + ip + "/v2/signal/tx";
+      var body = JSON.parse(document.getElementById('cqResponse').value);
+      var header = { "BOND-Token": token };
+
+      document.getElementById('request').value = request;
+      var http = new HTTPRequest();
+      http.put(request, body, header)
+         .then(response => { document.getElementById('response').value = response.status; })
+         .catch(err => document.getElementById('response').value = err);
+   }
+
+   // Hex to CQ conversion
+
+   function hexNibbleToBin(hex) {
+      return (parseInt(hex, 16).toString(2)).padStart(4, '0');
+   }
+
+   function hexToBin(hex) {
+      var binary = "";
+      [...hex].forEach(c => binary += hexNibbleToBin(c));
+      return binary;
+   }
+
+   function binaryToGroups(scanResultBinary) {
+      var groups = [];
+      var prev = "";
+      var count = 0;
+
+      scanResultBinary += "X"; // Add non-"0"/"1" so that final group is output
+      while (scanResultBinary.length > 0) {
+         curr = scanResultBinary[0];
+         scanResultBinary = scanResultBinary.substr(1);
+         if (curr == prev)
+            count++;
+         else {
+            if (prev != "")
+               groups.push({ "char": prev, "count": count });
+
+            prev = curr;
+            count = 1;
+         }
+      }
+
+      return groups;
+   }
+
+   function countToCQ(count) {
+      var cq = "";
+      var bin = count.toString(2);
+
+      while (bin.length > 0) {
+         if (bin[0] == "1") {
+            var len = bin.length;
+            if (len > 15)
+               len = 24; // use "Z" to mark "too long" error for now (we could instead write multiple Qs but this shouldn't occur)
+
+            var code = "B".charCodeAt(0) + len;
+            cq += String.fromCharCode(code);
+         }
+
+         bin = bin.substr(1);
+      }
+
+      return cq;
+   }
+
+   function groupsToCQ(groups) {
+      var cq = "";
+      groups.forEach(g => {
+         var encoding = countToCQ(g.count);
+         if (g.char == "1")
+            encoding = encoding.toLowerCase();
+
+         cq += encoding;
+      });
+
+      return cq;
+   }
+
+   function convert(scanResult) {
+      var scanResultBinary = hexToBin(scanResult.data);
+      var groups = binaryToGroups(scanResultBinary);
+      var cq = groupsToCQ(groups);
+
+      scanResult.encoding = "cq";
+      scanResult.data = cq;
+      delete scanResult._;
+      return scanResult;
+   }
+</script>
+</head>
+
+<body>
+<h1>Bond Bridge RF/IR scanner</h1>
+<p>Bond IP Address: <input id='ip' size="15" value="<your_bond_ip_address>" /></p>
+<p>Bond Token: <input id='token' size="20" value="<your_bond_token>" /></p>
+
+<p><button onclick=devices()>Get Device List</button></p>
+<p>
+   <button onclick=scanIR()>Scan IR</button>
+   <button onclick=scanRF()>Scan RF</button>
+   <button onclick=cancelScan()>Cancel Scan</button>
+</p>
+<p>
+   <button onclick=scanResult()>Get Scan Result</button>
+</p>
+
+<p>Request Url: <input id='request' size="80" readonly /></p>
+<p>Hex Response: <textarea id='response' rows="6" cols="80" readonly></textarea></p>
+<p>CQ Response: <textarea id='cqResponse' rows="6" cols="80"></textarea></p>
+<p><button onclick=transmit()>Trasmit</button></p>
+
+</body>
+</html>
